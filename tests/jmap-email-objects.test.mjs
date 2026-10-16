@@ -18,7 +18,7 @@ await build({
 	stdin: {
 		contents: `
 			export { buildEmailObject } from "./src/lib/jmap/email-objects.ts";
-			export { clipUtf8, decodePointerToken, onLightCard, utcDate } from "./src/lib/jmap/format-utils.ts";
+			export { clipUtf8, decodePointerToken, htmlToText, utcDate } from "./src/lib/jmap/format-utils.ts";
 			export { bodyBlobId, decodeBlobId, encodeMailboxRef } from "./src/lib/jmap/ids.ts";
 			export { filterToSql, mailboxRefCondition } from "./src/lib/jmap/email-query.ts";
 			export { buildSession, sessionState } from "./src/lib/jmap/session.ts";
@@ -43,7 +43,7 @@ const {
 	buildEmailObject,
 	clipUtf8,
 	decodePointerToken,
-	onLightCard,
+	htmlToText,
 	utcDate,
 	bodyBlobId,
 	decodeBlobId,
@@ -175,26 +175,42 @@ test("patch keys are JSON Pointers: ~0 and ~1 in a mailbox id are decoded (RFC 6
 	assert.equal(decodePointerToken("mbx1~trash"), "mbx1~trash");
 });
 
-test("an HTML body goes on a white card that states its colours as CSS, bgcolor and <font color>", () => {
-	const wrapped = onLightCard("<div>test</div>\n");
-	assert.match(wrapped, /^<table [^>]*bgcolor="#ffffff"[^>]*style="[^"]*background-color:#ffffff;color:#1f1f1f/);
-	assert.match(wrapped, /<td bgcolor="#ffffff" style="background-color:#ffffff;color:#1f1f1f"><font color="#1f1f1f"><div>test<\/div>\n<\/font><\/td><\/tr><\/table>$/);
-	// Only plain hex values: theme keywords such as CanvasText do not survive Jovra's renderer.
-	assert.doesNotMatch(wrapped, /CanvasText|color-scheme/);
-	// A full document keeps its head; the card sits inside <body>.
-	const doc = onLightCard('<html><head><meta charset="utf-8"></head><body dir="ltr"><div>Ответ</div></body></html>');
-	assert.match(doc, /^<html><head><meta charset="utf-8"><\/head><body dir="ltr"><table /);
-	assert.match(doc, /<div>Ответ<\/div><\/font><\/td><\/tr><\/table><\/body><\/html>$/);
-	assert.match(onLightCard("<body><p>no end"), /^<body><table [\s\S]*<p>no end<\/font><\/td><\/tr><\/table>$/);
+test("HTML from Yandex becomes readable text: blank lines, quotes and entities survive", () => {
+	// A reply as Yandex Mail writes it (the production message behind the empty body in Jovra).
+	const yandex =
+		'<div>жждж</div><div> </div><div>----------------</div><div>Кому: rostik.vorobev@ya.ru (rostik.vorobev@ya.ru);</div><div>Тема: test;</div><div>16.10.2026, 17:56, "Rostislav" &lt;rostislav@vorobev.tech&gt;:</div><blockquote><p>Ответ</p></blockquote>\n';
+	assert.equal(
+		htmlToText(yandex),
+		["жждж", "", "----------------", "Кому: rostik.vorobev@ya.ru (rostik.vorobev@ya.ru);", "Тема: test;", '16.10.2026, 17:56, "Rostislav" <rostislav@vorobev.tech>:', "> Ответ"].join("\n"),
+	);
+	assert.equal(htmlToText("<div>test</div>\n"), "test");
 });
 
-test("only a client that asks for it gets the light card, in bodyValues and in sizes", () => {
-	const plain = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], options);
-	assert.equal(plain.bodyValues["2"].value, "<div>test</div>");
-	const adapted = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], { ...options, htmlOnLightCard: true });
-	assert.equal(adapted.bodyValues["2"].value, onLightCard("<div>test</div>"));
-	assert.equal(adapted.htmlBody[0].size, new TextEncoder().encode(onLightCard("<div>test</div>")).length);
-	assert.equal(adapted.preview, plain.preview);
+test("HTML to text keeps links, lists, line breaks and drops head, style and comments", () => {
+	const gmail = '<div dir="ltr">Hello<div><br></div><div>See <a href="https://example.com/a?b=1&amp;c=2">the page</a> or <a href="https://example.com">https://example.com</a></div></div>';
+	assert.equal(htmlToText(gmail), "Hello\n\nSee the page (https://example.com/a?b=1&c=2) or https://example.com");
+	assert.equal(htmlToText('<a href="mailto:me@example.org">me@example.org</a>'), "me@example.org");
+	assert.equal(
+		htmlToText("<!DOCTYPE html><html><head><title>t</title><style>p{color:red}</style></head><body><!-- x --><p>One &amp; two&nbsp;&#1060;&#x1F44D;</p><ul><li>a</li><li><p>b</p></li></ul><p>end<br>line</p></body></html>"),
+		"One & two Ф👍\n\n- a\n- b\n\nend\nline",
+	);
+	assert.equal(htmlToText("<blockquote><div>outer</div><blockquote>inner</blockquote></blockquote>"), "> outer\n> > inner");
+	assert.equal(htmlToText("<pre>a  b\n  c</pre>"), "a  b\n  c");
+});
+
+test("given bodiesAsText, a message is its text part alone, made from the HTML when it has none", () => {
+	const html = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], options);
+	assert.equal(html.bodyValues["2"].value, "<div>test</div>");
+	const asText = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], { ...options, bodiesAsText: true });
+	assert.deepEqual(asText.bodyValues, { 1: { value: "test", isTruncated: false, isEncodingProblem: false } });
+	assert.deepEqual(asText.htmlBody.map((part) => [part.partId, part.type]), [["1", "text/plain"]]);
+	assert.deepEqual(asText.textBody.map((part) => [part.partId, part.type]), [["1", "text/plain"]]);
+	assert.equal(asText.bodyStructure.type, "text/plain");
+	assert.equal(asText.preview, html.preview);
+	// The sender's own text part wins over one made from the HTML.
+	const both = buildEmailObject(row({ textBody: "ffff\n", htmlBody: "<div>other</div>" }), [], { ...options, bodiesAsText: true });
+	assert.deepEqual(Object.keys(both.bodyValues), ["1"]);
+	assert.equal(both.bodyValues["1"].value, "ffff\n");
 });
 
 test("the raw Message-ID header has angle brackets even when the row stores none", () => {

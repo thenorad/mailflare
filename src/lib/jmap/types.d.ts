@@ -31,8 +31,8 @@ export type JmapContext = {
 	origin: string;
 	/** Client-assigned creation ids resolved so far in this request. */
 	createdIds: Record<string, JmapId>;
-	/** Serve HTML bodies wrapped by `onLightCard`, for clients that draw unstyled mail black on their dark mode. */
-	htmlOnLightCard?: boolean;
+	/** Serve every body as text/plain (made by `htmlToText` when a message has only HTML), for clients that cannot show HTML legibly. */
+	bodiesAsText?: boolean;
 };
 
 export type JmapMethodHandler = (ctx: JmapContext, args: Record<string, unknown>) => Promise<Record<string, unknown> | JmapMethodError>;

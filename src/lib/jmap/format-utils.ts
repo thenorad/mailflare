@@ -29,30 +29,128 @@ export function clipUtf8(value: string, maxBytes: number, options: { html?: bool
 	return { value: clipped, isTruncated: true };
 }
 
-/**
- * A white card with dark text, stated three ways because a client's HTML
- * sanitizer may keep only some of them: inline CSS with plain hex values, the
- * legacy bgcolor attribute, and <font color>. A theme-following colour
- * (color-scheme with CanvasText) does not survive Jovra's renderer.
- */
-const LIGHT_CARD_OPEN =
-	'<table role="presentation" width="100%" cellpadding="12" cellspacing="0" border="0" bgcolor="#ffffff" style="width:100%;background-color:#ffffff;color:#1f1f1f;border-radius:8px">' +
-	'<tr><td bgcolor="#ffffff" style="background-color:#ffffff;color:#1f1f1f"><font color="#1f1f1f">';
-const LIGHT_CARD_CLOSE = "</font></td></tr></table>";
+const NAMED_ENTITIES: Record<string, string> = {
+	nbsp: " ",
+	amp: "&",
+	lt: "<",
+	gt: ">",
+	quot: '"',
+	apos: "'",
+	laquo: "«",
+	raquo: "»",
+	mdash: "—",
+	ndash: "–",
+	hellip: "…",
+	copy: "©",
+	reg: "®",
+	trade: "™",
+	euro: "€",
+	bull: "•",
+};
+
+function decodeEntities(text: string): string {
+	return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, name: string) => {
+		if (name[0] === "#") {
+			const code = name[1] === "x" || name[1] === "X" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+		}
+		return NAMED_ENTITIES[name.toLowerCase()] ?? entity;
+	});
+}
+
+const BLOCK_TAGS = new Set(["address", "article", "aside", "center", "dd", "div", "dl", "dt", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "tfoot", "thead", "tr", "ul"]);
+/** Blocks followed by an empty line, as a reader expects between paragraphs. */
+const PARAGRAPH_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "table", "ul", "ol"]);
 
 /**
- * Put an HTML body on a light card. Most mail is written for a white page and
- * sets no text colour, so a client that draws it on its dark-mode background
- * without adapting it shows black on black. For a full document the card goes
- * inside <body>, so the head stays where it is.
+ * Plain text from an HTML body, for a client that cannot show HTML legibly:
+ * blocks become line breaks, links keep their address, quoted mail keeps its
+ * "> " prefix and entities are decoded. Pattern-based on purpose, since
+ * Workers have no DOM parser.
  */
-export function onLightCard(html: string): string {
-	const body = /<body\b[^>]*>/i.exec(html);
-	if (!body) return `${LIGHT_CARD_OPEN}${html}${LIGHT_CARD_CLOSE}`;
-	const start = body.index + body[0].length;
-	const end = html.slice(start).search(/<\/body\s*>/i);
-	const close = end < 0 ? html.length : start + end;
-	return `${html.slice(0, start)}${LIGHT_CARD_OPEN}${html.slice(start, close)}${LIGHT_CARD_CLOSE}${html.slice(close)}`;
+export function htmlToText(html: string): string {
+	const source = html.replace(/<!--[\s\S]*?-->/g, "").replace(/<(head|style|script|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "");
+	const lines: string[] = [];
+	let line = "";
+	let sawText = false;
+	let quoteDepth = 0;
+	let preDepth = 0;
+	let link: { href: string; start: number } | null = null;
+
+	const prefix = () => "> ".repeat(quoteDepth);
+	const push = (text: string) => lines.push(`${prefix()}${text}`.trimEnd());
+	const breakLine = () => {
+		// A list marker waits for its item, even when the item opens a block (<li><p>…).
+		if (line === "- ") return;
+		if (line.trim()) push(preDepth > 0 ? line : line.trim());
+		line = "";
+		sawText = false;
+	};
+	const blankLine = () => {
+		if (lines.length && lines[lines.length - 1] !== prefix().trimEnd()) push("");
+	};
+
+	for (const [token] of source.matchAll(/<[^>]*>|[^<]+/g)) {
+		if (/^<[!?]/.test(token)) continue; // <!DOCTYPE>, <?xml …?>
+		const tag = /^<\s*(\/?)\s*([a-z][a-z0-9]*)\b([^>]*)>$/i.exec(token);
+		if (!tag) {
+			// Text, or a stray "<" that opens no tag.
+			if (preDepth > 0) {
+				const [first, ...rest] = decodeEntities(token).split("\n");
+				line += first;
+				for (const part of rest) {
+					push(line);
+					line = part;
+				}
+			} else {
+				const text = decodeEntities(token.replace(/\s+/g, " "));
+				line += line && !line.endsWith(" ") ? text : text.trimStart();
+			}
+			sawText = true;
+			continue;
+		}
+		const closing = tag[1] === "/";
+		const name = tag[2].toLowerCase();
+		if (name === "br") {
+			if (!line.trim()) push("");
+			else breakLine();
+			continue;
+		}
+		if (name === "a") {
+			if (!closing) {
+				const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag[3]);
+				link = href ? { href: decodeEntities(href[1] ?? href[2] ?? href[3] ?? "").trim(), start: line.length } : null;
+			} else if (link) {
+				const label = line.slice(link.start).trim();
+				const target = link.href.replace(/^mailto:/i, "");
+				if (/^(https?:|mailto:)/i.test(link.href) && label !== target) line += ` (${target})`;
+				link = null;
+			}
+			continue;
+		}
+		if (name === "blockquote") {
+			breakLine();
+			// A quote ends at its last line, not at the blank line its last paragraph left.
+			if (closing) while (lines.length && lines[lines.length - 1] === prefix().trimEnd()) lines.pop();
+			quoteDepth = Math.max(quoteDepth + (closing ? -1 : 1), 0);
+			continue;
+		}
+		if (name === "td" || name === "th") {
+			if (!closing && line.trim()) line += " ";
+			continue;
+		}
+		if (!BLOCK_TAGS.has(name)) continue;
+		// A block holding only whitespace (Yandex writes "<div> </div>") is an empty line.
+		const emptyBlock = closing && !line.trim() && sawText;
+		breakLine();
+		if (name === "pre") preDepth = Math.max(preDepth + (closing ? -1 : 1), 0);
+		if (emptyBlock) blankLine();
+		if (name === "li" && !closing) line = "- ";
+		if (name === "hr") push("—".repeat(16));
+		if (closing && PARAGRAPH_TAGS.has(name)) blankLine();
+	}
+	breakLine();
+	return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**

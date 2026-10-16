@@ -4,7 +4,7 @@ import { parseEmailAddressParts, splitEmailAddressList } from "@/lib/email/addre
 import { htmlToReadableText } from "@/lib/email/reply-content-utils";
 import { KEYWORD_DRAFT, KEYWORD_FLAGGED, KEYWORD_SEEN } from "./constants";
 import { attachmentBlobId, bodyBlobId, encodeMailboxRef, messageBlobId, statusToRole } from "./ids";
-import { clipUtf8, onLightCard, utcDate } from "./format-utils";
+import { clipUtf8, htmlToText, utcDate } from "./format-utils";
 import type { EmailAddressObject, EmailBodyPart, JmapContext } from "./types";
 
 type MessageRow = typeof messages.$inferSelect;
@@ -68,9 +68,10 @@ function attachmentPart(attachment: AttachmentRow): EmailBodyPart {
  * text and HTML Mailflare keeps; attachments become parts with blob ids the
  * download endpoint understands. Property filtering happens in the caller.
  */
-export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], options: { fetchBodies: boolean; maxBodyValueBytes: number; htmlOnLightCard?: boolean }) {
-	const text = row.textBody ?? "";
-	const html = row.htmlBody ? (options.htmlOnLightCard ? onLightCard(row.htmlBody) : row.htmlBody) : "";
+export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], options: { fetchBodies: boolean; maxBodyValueBytes: number; bodiesAsText?: boolean }) {
+	// Given bodiesAsText, the message is its text part alone, made from the HTML when it has none.
+	const text = options.bodiesAsText && !row.textBody?.trim() ? htmlToText(row.htmlBody ?? "") : (row.textBody ?? "");
+	const html = options.bodiesAsText ? "" : (row.htmlBody ?? "");
 	const textSize = new TextEncoder().encode(text).length;
 	const htmlSize = new TextEncoder().encode(html).length;
 	const textPart = text ? bodyPart("1", "text/plain", textSize, bodyBlobId(row.id, "txt")) : null;

@@ -42,9 +42,10 @@ export async function handleJmapRequest(request: Request, env: CloudflareEnv): P
 		accountId: auth.userId,
 		origin: env.APP_URL?.trim() || url.origin,
 		createdIds: {},
-		// Jovra renders HTML mail on its dark-mode background without adapting the text
-		// colour, and drops theme-following CSS, so its HTML goes on a light card.
-		htmlOnLightCard: /\bJovra/i.test(request.headers.get("User-Agent") ?? ""),
+		// Jovra draws HTML mail black on its dark-mode background, and its Safe HTML
+		// strips every colour a server could set (style, bgcolor, <font>), so it gets
+		// bodies as plain text instead.
+		bodiesAsText: /\bJovra/i.test(request.headers.get("User-Agent") ?? ""),
 	};
 
 	if (path === "/jmap/session" && request.method === "GET") {
