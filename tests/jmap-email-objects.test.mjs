@@ -105,6 +105,21 @@ test("every leaf body part has a blobId that names its decoded body (RFC 8621 §
 	assert.equal(decodeBlobId("zzz~msg_1"), null);
 });
 
+test("blob ids are valid JMAP Ids, since clients refuse to put anything else in a download URL", () => {
+	const ID = /^[A-Za-z0-9_-]{1,255}$/;
+	const email = buildEmailObject(row({ id: "msg_5W1Ce-EpemRxq-pm79RXC" }), [{ id: "att_x-Y_z", messageId: "msg_5W1Ce-EpemRxq-pm79RXC", filename: "a.pdf", contentType: "application/pdf", size: 3, r2Key: "k", disposition: "attachment", contentId: null }], options);
+	const blobIds = [email.blobId, ...email.bodyStructure.subParts.flatMap((part) => (part.subParts ?? [part]).map((leaf) => leaf.blobId)), ...email.attachments.map((part) => part.blobId)];
+	// The message, its text and HTML parts, and the attachment (listed in bodyStructure and attachments).
+	assert.equal(blobIds.length, 5);
+	for (const blobId of blobIds) assert.match(blobId, ID);
+	// The first "-" splits kind from id even though nanoid ids contain "-" themselves.
+	assert.deepEqual(decodeBlobId(email.blobId), { kind: "msg", id: "msg_5W1Ce-EpemRxq-pm79RXC" });
+	assert.deepEqual(decodeBlobId(email.attachments[0].blobId), { kind: "att", id: "att_x-Y_z" });
+	// Ids handed out before the change still resolve.
+	assert.deepEqual(decodeBlobId("msg~msg_1"), { kind: "msg", id: "msg_1" });
+	assert.deepEqual(decodeBlobId("up~upl_1"), { kind: "up", id: "upl_1" });
+});
+
 test("a message without bodies still exposes a downloadable empty text part", () => {
 	const email = buildEmailObject(row({ textBody: null, htmlBody: null }), [], options);
 	assert.equal(email.bodyStructure.type, "text/plain");
