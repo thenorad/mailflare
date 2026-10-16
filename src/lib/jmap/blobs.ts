@@ -3,6 +3,7 @@ import { messageAttachments, messages } from "@/db/schema";
 import { newId } from "@/lib/ids";
 import { LIMITS } from "./constants";
 import { decodeBlobId, uploadBlobId } from "./ids";
+import { themeAwareHtml } from "./format-utils";
 import { listAccessibleMailboxIdSet } from "./access";
 import type { JmapContext } from "./types";
 
@@ -77,8 +78,10 @@ export async function readBlob(ctx: JmapContext, blobId: string): Promise<{ body
 	const [row] = await ctx.db.select().from(messages).where(and(eq(messages.id, decoded.id))).limit(1);
 	if (!row || !row.mailboxId || !accessible.has(row.mailboxId)) return null;
 	if (decoded.kind === "txt" || decoded.kind === "htm") {
-		// A body part's octets after transfer decoding: the text Mailflare stored, as UTF-8.
-		const bytes = new TextEncoder().encode((decoded.kind === "txt" ? row.textBody : row.htmlBody) ?? "");
+		// A body part's octets after transfer decoding: the text Mailflare stored, as UTF-8,
+		// with HTML adapted to the reader's theme where Email/get adapts it too.
+		const html = row.htmlBody && ctx.adaptHtmlToTheme ? themeAwareHtml(row.htmlBody) : row.htmlBody;
+		const bytes = new TextEncoder().encode((decoded.kind === "txt" ? row.textBody : html) ?? "");
 		const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 		return { body, type: decoded.kind === "txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8", name: null, size: bytes.byteLength };
 	}

@@ -29,6 +29,31 @@ export function clipUtf8(value: string, maxBytes: number, options: { html?: bool
 	return { value: clipped, isTruncated: true };
 }
 
+/** Unstyled text follows the reader's theme: CanvasText is white in dark mode and black in light mode. */
+const THEMED_STYLE = "color-scheme:light dark;color:CanvasText";
+/** Mail that paints its own colours was designed for a white page, so it keeps one. */
+const LIGHT_CARD_STYLE = "color-scheme:light;background-color:#ffffff;color:#1f1f1f;padding:12px;border-radius:8px";
+/** A colour or background of the message's own: CSS declarations, or the legacy bgcolor/text/color attributes. */
+const OWN_COLORS = /(?:^|[\s;"'{])(?:color|background(?:-color|-image)?)\s*:|\b(?:bgcolor|text|color)\s*=\s*["']?#?\w/i;
+
+/**
+ * Make an HTML body readable on whatever background a client draws it on. A
+ * client that renders mail on its dark-mode background without adapting it
+ * shows unstyled text black on black. Mail that sets no colours gets its text
+ * colour from the reader's theme; mail with colours of its own goes on a light
+ * card it was designed for. For a full document the wrapper goes inside
+ * <body>, so the head stays where it is.
+ */
+export function themeAwareHtml(html: string): string {
+	const open = `<div style="${OWN_COLORS.test(html) ? LIGHT_CARD_STYLE : THEMED_STYLE}">`;
+	const body = /<body\b[^>]*>/i.exec(html);
+	if (!body) return `${open}${html}</div>`;
+	const start = body.index + body[0].length;
+	const end = html.slice(start).search(/<\/body\s*>/i);
+	const close = end < 0 ? html.length : start + end;
+	return `${html.slice(0, start)}${open}${html.slice(start, close)}</div>${html.slice(close)}`;
+}
+
 /**
  * One JSON Pointer reference token (RFC 6901 §4): `~1` is `/` and `~0` is `~`,
  * decoded in that order. PatchObject keys are pointers (RFC 8620 §5.3), so a

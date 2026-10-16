@@ -18,7 +18,7 @@ await build({
 	stdin: {
 		contents: `
 			export { buildEmailObject } from "./src/lib/jmap/email-objects.ts";
-			export { clipUtf8, decodePointerToken, utcDate } from "./src/lib/jmap/format-utils.ts";
+			export { clipUtf8, decodePointerToken, themeAwareHtml, utcDate } from "./src/lib/jmap/format-utils.ts";
 			export { bodyBlobId, decodeBlobId, encodeMailboxRef } from "./src/lib/jmap/ids.ts";
 			export { filterToSql, mailboxRefCondition } from "./src/lib/jmap/email-query.ts";
 			export { buildSession, sessionState } from "./src/lib/jmap/session.ts";
@@ -43,6 +43,7 @@ const {
 	buildEmailObject,
 	clipUtf8,
 	decodePointerToken,
+	themeAwareHtml,
 	utcDate,
 	bodyBlobId,
 	decodeBlobId,
@@ -172,6 +173,30 @@ test("patch keys are JSON Pointers: ~0 and ~1 in a mailbox id are decoded (RFC 6
 	assert.equal(decodePointerToken("~01"), "~1");
 	// Clients that do not escape still work: a bare ~ followed by a letter is left alone.
 	assert.equal(decodePointerToken("mbx1~trash"), "mbx1~trash");
+});
+
+test("unstyled HTML takes the reader's theme; HTML with its own colours goes on a light card", () => {
+	const THEMED = '<div style="color-scheme:light dark;color:CanvasText">';
+	const CARD = '<div style="color-scheme:light;background-color:#ffffff;color:#1f1f1f;padding:12px;border-radius:8px">';
+	assert.equal(themeAwareHtml("<div>test</div>\n"), `${THEMED}<div>test</div>\n</div>`);
+	for (const html of ['<p style="color:#222">Hi</p>', '<table bgcolor="#f5f5f5"><tr><td>x</td></tr></table>', '<font color="red">x</font>', "<style>p { background-color: #eee }</style><p>x</p>"]) {
+		assert.ok(themeAwareHtml(html).startsWith(CARD), html);
+	}
+	// A full document keeps its head; the wrapper sits inside <body>.
+	assert.equal(
+		themeAwareHtml('<html><head><meta charset="utf-8"></head><body dir="ltr"><div>Ответ</div></body></html>'),
+		`<html><head><meta charset="utf-8"></head><body dir="ltr">${THEMED}<div>Ответ</div></div></body></html>`,
+	);
+	assert.equal(themeAwareHtml("<body><p>no end"), `<body>${THEMED}<p>no end</div>`);
+});
+
+test("only a client that asks for it gets the theme wrapper, in bodyValues and in sizes", () => {
+	const plain = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], options);
+	assert.equal(plain.bodyValues["2"].value, "<div>test</div>");
+	const adapted = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], { ...options, adaptHtmlToTheme: true });
+	assert.equal(adapted.bodyValues["2"].value, themeAwareHtml("<div>test</div>"));
+	assert.equal(adapted.htmlBody[0].size, new TextEncoder().encode(themeAwareHtml("<div>test</div>")).length);
+	assert.equal(adapted.preview, plain.preview);
 });
 
 test("the raw Message-ID header has angle brackets even when the row stores none", () => {

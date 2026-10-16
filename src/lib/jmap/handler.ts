@@ -35,7 +35,16 @@ export async function handleJmapRequest(request: Request, env: CloudflareEnv): P
 	if (!hasScope(auth.scopes, "jmap")) {
 		return new Response(JSON.stringify({ error: "This API key does not have the jmap scope" }), { status: 403, headers: JSON_HEADERS });
 	}
-	const ctx: JmapContext = { env, db: getDb(env), auth, accountId: auth.userId, origin: env.APP_URL?.trim() || url.origin, createdIds: {} };
+	const ctx: JmapContext = {
+		env,
+		db: getDb(env),
+		auth,
+		accountId: auth.userId,
+		origin: env.APP_URL?.trim() || url.origin,
+		createdIds: {},
+		// Jovra renders HTML mail on its dark-mode background without adapting the text colour.
+		adaptHtmlToTheme: /\bJovra/i.test(request.headers.get("User-Agent") ?? ""),
+	};
 
 	if (path === "/jmap/session" && request.method === "GET") {
 		return new Response(JSON.stringify(buildSession(ctx)), { headers: JSON_HEADERS });
