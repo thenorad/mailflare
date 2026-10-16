@@ -64,6 +64,15 @@ function headerCondition(header: string[]): SQL {
 			// The column is the space-joined chain, so pad both sides to match whole ids only.
 			return value ? like(sql`' ' || coalesce(${messages.references}, '') || ' '`, `% ${likeEscape(value)} %`) : sql`0`;
 		default:
+			// Jovra tags outgoing mail with X-Jovra-Outbox-ID and queries for it to detect
+			// duplicates. Mailflare doesn't store arbitrary headers, so treat the value as a
+			// Message-ID alias (matches if the client reuses it there), else match nothing.
+			if (name === "x-jovra-outbox-id") {
+				if (header.length === 1 || !value) return sql`0`;
+				return inArray(messages.providerMessageId, [value, `<${value}>`]);
+			}
+			// Other client-specific X-* headers: no match instead of failing the whole query.
+			if (name.startsWith("x-")) return sql`0`;
 			throw unsupportedFilter(`Cannot filter on the ${header[0]} header`);
 	}
 }
