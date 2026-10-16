@@ -18,7 +18,7 @@ await build({
 	stdin: {
 		contents: `
 			export { buildEmailObject } from "./src/lib/jmap/email-objects.ts";
-			export { clipUtf8, decodePointerToken, themeAwareHtml, utcDate } from "./src/lib/jmap/format-utils.ts";
+			export { clipUtf8, decodePointerToken, onLightCard, utcDate } from "./src/lib/jmap/format-utils.ts";
 			export { bodyBlobId, decodeBlobId, encodeMailboxRef } from "./src/lib/jmap/ids.ts";
 			export { filterToSql, mailboxRefCondition } from "./src/lib/jmap/email-query.ts";
 			export { buildSession, sessionState } from "./src/lib/jmap/session.ts";
@@ -43,7 +43,7 @@ const {
 	buildEmailObject,
 	clipUtf8,
 	decodePointerToken,
-	themeAwareHtml,
+	onLightCard,
 	utcDate,
 	bodyBlobId,
 	decodeBlobId,
@@ -175,27 +175,25 @@ test("patch keys are JSON Pointers: ~0 and ~1 in a mailbox id are decoded (RFC 6
 	assert.equal(decodePointerToken("mbx1~trash"), "mbx1~trash");
 });
 
-test("unstyled HTML takes the reader's theme; HTML with its own colours goes on a light card", () => {
-	const THEMED = '<div style="color-scheme:light dark;color:CanvasText">';
-	const CARD = '<div style="color-scheme:light;background-color:#ffffff;color:#1f1f1f;padding:12px;border-radius:8px">';
-	assert.equal(themeAwareHtml("<div>test</div>\n"), `${THEMED}<div>test</div>\n</div>`);
-	for (const html of ['<p style="color:#222">Hi</p>', '<table bgcolor="#f5f5f5"><tr><td>x</td></tr></table>', '<font color="red">x</font>', "<style>p { background-color: #eee }</style><p>x</p>"]) {
-		assert.ok(themeAwareHtml(html).startsWith(CARD), html);
-	}
-	// A full document keeps its head; the wrapper sits inside <body>.
-	assert.equal(
-		themeAwareHtml('<html><head><meta charset="utf-8"></head><body dir="ltr"><div>Ответ</div></body></html>'),
-		`<html><head><meta charset="utf-8"></head><body dir="ltr">${THEMED}<div>Ответ</div></div></body></html>`,
-	);
-	assert.equal(themeAwareHtml("<body><p>no end"), `<body>${THEMED}<p>no end</div>`);
+test("an HTML body goes on a white card that states its colours as CSS, bgcolor and <font color>", () => {
+	const wrapped = onLightCard("<div>test</div>\n");
+	assert.match(wrapped, /^<table [^>]*bgcolor="#ffffff"[^>]*style="[^"]*background-color:#ffffff;color:#1f1f1f/);
+	assert.match(wrapped, /<td bgcolor="#ffffff" style="background-color:#ffffff;color:#1f1f1f"><font color="#1f1f1f"><div>test<\/div>\n<\/font><\/td><\/tr><\/table>$/);
+	// Only plain hex values: theme keywords such as CanvasText do not survive Jovra's renderer.
+	assert.doesNotMatch(wrapped, /CanvasText|color-scheme/);
+	// A full document keeps its head; the card sits inside <body>.
+	const doc = onLightCard('<html><head><meta charset="utf-8"></head><body dir="ltr"><div>Ответ</div></body></html>');
+	assert.match(doc, /^<html><head><meta charset="utf-8"><\/head><body dir="ltr"><table /);
+	assert.match(doc, /<div>Ответ<\/div><\/font><\/td><\/tr><\/table><\/body><\/html>$/);
+	assert.match(onLightCard("<body><p>no end"), /^<body><table [\s\S]*<p>no end<\/font><\/td><\/tr><\/table>$/);
 });
 
-test("only a client that asks for it gets the theme wrapper, in bodyValues and in sizes", () => {
+test("only a client that asks for it gets the light card, in bodyValues and in sizes", () => {
 	const plain = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], options);
 	assert.equal(plain.bodyValues["2"].value, "<div>test</div>");
-	const adapted = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], { ...options, adaptHtmlToTheme: true });
-	assert.equal(adapted.bodyValues["2"].value, themeAwareHtml("<div>test</div>"));
-	assert.equal(adapted.htmlBody[0].size, new TextEncoder().encode(themeAwareHtml("<div>test</div>")).length);
+	const adapted = buildEmailObject(row({ textBody: null, htmlBody: "<div>test</div>" }), [], { ...options, htmlOnLightCard: true });
+	assert.equal(adapted.bodyValues["2"].value, onLightCard("<div>test</div>"));
+	assert.equal(adapted.htmlBody[0].size, new TextEncoder().encode(onLightCard("<div>test</div>")).length);
 	assert.equal(adapted.preview, plain.preview);
 });
 

@@ -29,29 +29,30 @@ export function clipUtf8(value: string, maxBytes: number, options: { html?: bool
 	return { value: clipped, isTruncated: true };
 }
 
-/** Unstyled text follows the reader's theme: CanvasText is white in dark mode and black in light mode. */
-const THEMED_STYLE = "color-scheme:light dark;color:CanvasText";
-/** Mail that paints its own colours was designed for a white page, so it keeps one. */
-const LIGHT_CARD_STYLE = "color-scheme:light;background-color:#ffffff;color:#1f1f1f;padding:12px;border-radius:8px";
-/** A colour or background of the message's own: CSS declarations, or the legacy bgcolor/text/color attributes. */
-const OWN_COLORS = /(?:^|[\s;"'{])(?:color|background(?:-color|-image)?)\s*:|\b(?:bgcolor|text|color)\s*=\s*["']?#?\w/i;
+/**
+ * A white card with dark text, stated three ways because a client's HTML
+ * sanitizer may keep only some of them: inline CSS with plain hex values, the
+ * legacy bgcolor attribute, and <font color>. A theme-following colour
+ * (color-scheme with CanvasText) does not survive Jovra's renderer.
+ */
+const LIGHT_CARD_OPEN =
+	'<table role="presentation" width="100%" cellpadding="12" cellspacing="0" border="0" bgcolor="#ffffff" style="width:100%;background-color:#ffffff;color:#1f1f1f;border-radius:8px">' +
+	'<tr><td bgcolor="#ffffff" style="background-color:#ffffff;color:#1f1f1f"><font color="#1f1f1f">';
+const LIGHT_CARD_CLOSE = "</font></td></tr></table>";
 
 /**
- * Make an HTML body readable on whatever background a client draws it on. A
- * client that renders mail on its dark-mode background without adapting it
- * shows unstyled text black on black. Mail that sets no colours gets its text
- * colour from the reader's theme; mail with colours of its own goes on a light
- * card it was designed for. For a full document the wrapper goes inside
- * <body>, so the head stays where it is.
+ * Put an HTML body on a light card. Most mail is written for a white page and
+ * sets no text colour, so a client that draws it on its dark-mode background
+ * without adapting it shows black on black. For a full document the card goes
+ * inside <body>, so the head stays where it is.
  */
-export function themeAwareHtml(html: string): string {
-	const open = `<div style="${OWN_COLORS.test(html) ? LIGHT_CARD_STYLE : THEMED_STYLE}">`;
+export function onLightCard(html: string): string {
 	const body = /<body\b[^>]*>/i.exec(html);
-	if (!body) return `${open}${html}</div>`;
+	if (!body) return `${LIGHT_CARD_OPEN}${html}${LIGHT_CARD_CLOSE}`;
 	const start = body.index + body[0].length;
 	const end = html.slice(start).search(/<\/body\s*>/i);
 	const close = end < 0 ? html.length : start + end;
-	return `${html.slice(0, start)}${open}${html.slice(start, close)}</div>${html.slice(close)}`;
+	return `${html.slice(0, start)}${LIGHT_CARD_OPEN}${html.slice(start, close)}${LIGHT_CARD_CLOSE}${html.slice(close)}`;
 }
 
 /**

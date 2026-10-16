@@ -95,7 +95,7 @@ export const emailGet: JmapMethodHandler = async (ctx, args) => {
 	const found = new Set<string>();
 	const list = rows.map((row) => {
 		found.add(row.id);
-		const full = buildEmailObject(row, attachments.get(row.id) ?? [], { fetchBodies, maxBodyValueBytes, adaptHtmlToTheme: ctx.adaptHtmlToTheme });
+		const full = buildEmailObject(row, attachments.get(row.id) ?? [], { fetchBodies, maxBodyValueBytes, htmlOnLightCard: ctx.htmlOnLightCard });
 		if (!properties) return full;
 		const picked: Record<string, unknown> = { id: row.id };
 		for (const key of properties) {
