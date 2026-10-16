@@ -18,7 +18,7 @@ await build({
 	stdin: {
 		contents: `
 			export { buildEmailObject } from "./src/lib/jmap/email-objects.ts";
-			export { clipUtf8, utcDate } from "./src/lib/jmap/format-utils.ts";
+			export { clipUtf8, decodePointerToken, utcDate } from "./src/lib/jmap/format-utils.ts";
 			export { bodyBlobId, decodeBlobId, encodeMailboxRef } from "./src/lib/jmap/ids.ts";
 			export { filterToSql, mailboxRefCondition } from "./src/lib/jmap/email-query.ts";
 			export { buildSession, sessionState } from "./src/lib/jmap/session.ts";
@@ -42,6 +42,7 @@ await build({
 const {
 	buildEmailObject,
 	clipUtf8,
+	decodePointerToken,
 	utcDate,
 	bodyBlobId,
 	decodeBlobId,
@@ -145,6 +146,17 @@ test("a truncated HTML body value does not end inside a tag", () => {
 	assert.deepEqual(clipUtf8('<p>Hi</p><a href="https://example.com">x</a>', 20, { html: true }), { value: "<p>Hi</p>", isTruncated: true });
 	assert.deepEqual(clipUtf8("<p>Hi</p>tail", 11, { html: true }), { value: "<p>Hi</p>ta", isTruncated: true });
 	assert.deepEqual(clipUtf8("a < b and more text", 8, { html: false }), { value: "a < b an", isTruncated: true });
+});
+
+test("patch keys are JSON Pointers: ~0 and ~1 in a mailbox id are decoded (RFC 6901)", () => {
+	// What Jovra sends to move a message to Trash: the `~` in Mailflare's ids escaped as `~0`.
+	assert.equal(decodePointerToken("mbx_5W1Ce-EpemRxq-pm79RXC~0trash"), "mbx_5W1Ce-EpemRxq-pm79RXC~trash");
+	assert.equal(decodePointerToken("mbx1~0f~0fld1"), "mbx1~f~fld1");
+	assert.equal(decodePointerToken("a~1b"), "a/b");
+	// ~01 is an escaped "~" followed by "1", never a "/".
+	assert.equal(decodePointerToken("~01"), "~1");
+	// Clients that do not escape still work: a bare ~ followed by a letter is left alone.
+	assert.equal(decodePointerToken("mbx1~trash"), "mbx1~trash");
 });
 
 test("the raw Message-ID header has angle brackets even when the row stores none", () => {

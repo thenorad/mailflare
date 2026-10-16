@@ -13,6 +13,7 @@ import { decodeBlobId, decodeMailboxRef, roleToStatus } from "./ids";
 import { buildEmailObject, loadAttachmentsByMessage, resolveHeaderProperty } from "./email-objects";
 import { importFlags, parseReceivedAt, resolveDraftsMailbox } from "./email-import-utils";
 import { filterToSql, mailboxRefCondition, sortToSql } from "./email-query";
+import { decodePointerToken } from "./format-utils";
 import { getEmailState } from "./state";
 import { listAccessibleMailboxIdSet, listJmapMailboxes } from "./access";
 import { deleteUpload, readUpload, storeRawDraftMime } from "./blobs";
@@ -166,7 +167,7 @@ function targetFromMailboxIds(row: MessageRow, patch: Record<string, unknown>, a
 		for (const [key, value] of Object.entries(patch)) {
 			if (!key.startsWith("mailboxIds/")) continue;
 			touched = true;
-			const id = key.slice("mailboxIds/".length);
+			const id = decodePointerToken(key.slice("mailboxIds/".length));
 			if (value) current.add(id);
 			else current.delete(id);
 		}
@@ -195,7 +196,7 @@ function keywordsFromPatch(patch: Record<string, unknown>): { read?: boolean; st
 		result.starred = !!map[KEYWORD_FLAGGED];
 	}
 	for (const [key, value] of Object.entries(patch)) {
-		if (key.startsWith("keywords/")) apply(key.slice("keywords/".length), value);
+		if (key.startsWith("keywords/")) apply(decodePointerToken(key.slice("keywords/".length)), value);
 	}
 	return result;
 }

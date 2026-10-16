@@ -4,6 +4,7 @@ import { mailboxChanges, mailboxGet, mailboxQuery, mailboxSet } from "./mailboxe
 import { emailChanges, emailGet, emailImport, emailQuery, emailQueryChanges, emailSet, emailUnsupported, searchSnippetGet, threadChanges, threadGet } from "./emails";
 import { emailSubmissionChanges, emailSubmissionGet, emailSubmissionQuery, emailSubmissionSet, identityChanges, identityGet, identitySet } from "./identities";
 import { sessionState } from "./session";
+import { decodePointerToken } from "./format-utils";
 import type { JmapContext, JmapInvocation, JmapMethodHandler, JmapRequest, JmapResponse } from "./types";
 
 const METHODS: Record<string, JmapMethodHandler> = {
@@ -38,7 +39,7 @@ export const SUPPORTED_CAPABILITIES = new Set([CAPABILITY_CORE, CAPABILITY_MAIL,
 
 /** JSON Pointer lookup with the JMAP `*` array-flattening extension. */
 function resolvePointer(value: unknown, path: string): unknown {
-	const segments = path.split("/").slice(1).map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+	const segments = path.split("/").slice(1).map(decodePointerToken);
 	let current: unknown = value;
 	for (let index = 0; index < segments.length; index += 1) {
 		const segment = segments[index];

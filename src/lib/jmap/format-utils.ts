@@ -29,6 +29,15 @@ export function clipUtf8(value: string, maxBytes: number, options: { html?: bool
 	return { value: clipped, isTruncated: true };
 }
 
+/**
+ * One JSON Pointer reference token (RFC 6901 §4): `~1` is `/` and `~0` is `~`,
+ * decoded in that order. PatchObject keys are pointers (RFC 8620 §5.3), so a
+ * client patching `mailboxIds/<id>` escapes the `~` in Mailflare's ids.
+ */
+export function decodePointerToken(token: string): string {
+	return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
 /** FNV-1a, 32 bits, base 36: a short stable digest for state strings, not for security. */
 export function shortHash(value: string): string {
 	let hash = 0x811c9dc5;
