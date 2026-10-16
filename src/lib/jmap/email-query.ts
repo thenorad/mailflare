@@ -9,8 +9,11 @@ import type { Comparator, Filter, FilterCondition, MailboxRef } from "./types";
 
 /** The SQL predicate for "is in this JMAP Mailbox". */
 export function mailboxRefCondition(ref: MailboxRef): SQL {
+	// The address-level Mailbox only groups its children. No Email lists it in
+	// mailboxIds, so it must hold nothing here either: a query answering "all
+	// mail" for it made clients file Sent mail as received mail of that folder.
+	if (ref.kind === "account") return sql`0`;
 	const base = eq(messages.mailboxId, ref.mailboxId);
-	if (ref.kind === "account") return base;
 	if (ref.kind === "folder") return and(base, eq(messages.folderId, ref.folderId))!;
 	const status = roleToStatus(ref.role);
 	if (ref.role === "inbox") return and(base, eq(messages.status, status), isNull(messages.folderId))!;

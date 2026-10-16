@@ -3,7 +3,8 @@ import { authenticateApiRequest, hasScope } from "@/lib/api/key-auth";
 import { LIMITS } from "./constants";
 import { corsHeaders, JmapError, problemResponse } from "./errors";
 import { readBlob, storeUpload } from "./blobs";
-import { processRequest, sessionState, validateRequest } from "./processor";
+import { describeExchange } from "./log-utils";
+import { processRequest, validateRequest } from "./processor";
 import { buildSession } from "./session";
 import { getEmailState, getMailboxState } from "./state";
 import type { JmapContext } from "./types";
@@ -37,7 +38,7 @@ export async function handleJmapRequest(request: Request, env: CloudflareEnv): P
 	const ctx: JmapContext = { env, db: getDb(env), auth, accountId: auth.userId, origin: env.APP_URL?.trim() || url.origin, createdIds: {} };
 
 	if (path === "/jmap/session" && request.method === "GET") {
-		return new Response(JSON.stringify(buildSession(ctx, await sessionState(ctx))), { headers: JSON_HEADERS });
+		return new Response(JSON.stringify(buildSession(ctx)), { headers: JSON_HEADERS });
 	}
 
 	if (path === "/jmap/api" && request.method === "POST") {
@@ -50,7 +51,10 @@ export async function handleJmapRequest(request: Request, env: CloudflareEnv): P
 			return problemResponse("notJSON", 400, "Body is not valid JSON");
 		}
 		try {
-			const response = await processRequest(ctx, validateRequest(body));
+			const started = Date.now();
+			const jmapRequest = validateRequest(body);
+			const response = await processRequest(ctx, jmapRequest);
+			console.log(describeExchange(jmapRequest, response, Date.now() - started));
 			return new Response(JSON.stringify(response), { headers: JSON_HEADERS });
 		} catch (error) {
 			if (error instanceof JmapError) return problemResponse(error.type, 400, error.message, error.extra);

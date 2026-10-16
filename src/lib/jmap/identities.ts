@@ -7,6 +7,7 @@ import { decodeIdentityId, identityId } from "./ids";
 import { listJmapMailboxes, listSendableAddresses } from "./access";
 import { getEmailState } from "./state";
 import { JmapError } from "./errors";
+import { utcDate } from "./format-utils";
 import type { JmapContext, JmapMethodHandler } from "./types";
 
 /** One Identity per address the account may send from. */
@@ -107,7 +108,7 @@ export const emailSubmissionSet: JmapMethodHandler = async (ctx, args) => {
 				emailId: result.messageId,
 				threadId: draft.threadId ?? result.messageId,
 				envelope: null,
-				sendAt: new Date().toISOString(),
+				sendAt: utcDate(new Date()),
 				undoStatus: "final",
 				deliveryStatus: null,
 				dsnBlobIds: [],
