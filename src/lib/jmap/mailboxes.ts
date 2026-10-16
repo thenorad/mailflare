@@ -44,6 +44,7 @@ async function loadCounts(ctx: JmapContext, mailboxIds: string[]): Promise<Map<s
 	};
 	for (const row of rows) {
 		if (!row.mailboxId) continue;
+		add(encodeMailboxRef({ kind: "account", mailboxId: row.mailboxId }), row);
 		if (row.folderId) {
 			add(encodeMailboxRef({ kind: "folder", mailboxId: row.mailboxId, folderId: row.folderId }), row);
 			continue;
@@ -60,13 +61,8 @@ function statusRole(status: string): SystemRole | null {
 	return null;
 }
 
-/**
- * What the account may do in one JMAP Mailbox. The address-level container holds
- * no mail, so nothing can be added to or removed from it; folders are only
- * created directly under it, which is all Mailbox/set create accepts.
- */
-function rights(mailbox: AccessibleMailbox, kind: "container" | "system" | "folder") {
-	const canWrite = mailbox.permission !== "read_only" && kind !== "container";
+function rights(mailbox: AccessibleMailbox, system: boolean) {
+	const canWrite = mailbox.permission !== "read_only";
 	const canSend = mailbox.permission === "send_as" || mailbox.permission === "send_on_behalf" || mailbox.permission === "full_access";
 	return {
 		mayReadItems: true,
@@ -74,9 +70,9 @@ function rights(mailbox: AccessibleMailbox, kind: "container" | "system" | "fold
 		mayRemoveItems: canWrite,
 		maySetSeen: canWrite,
 		maySetKeywords: canWrite,
-		mayCreateChild: kind === "container" && mailbox.permission === "full_access",
-		mayRename: kind === "folder" && mailbox.permission === "full_access",
-		mayDelete: kind === "folder" && mailbox.permission === "full_access",
+		mayCreateChild: mailbox.permission === "full_access",
+		mayRename: !system && mailbox.permission === "full_access",
+		mayDelete: !system && mailbox.permission === "full_access",
 		maySubmit: canSend,
 	};
 }
@@ -92,17 +88,18 @@ export async function buildAllMailboxes(ctx: JmapContext) {
 	for (const mailbox of accessible) {
 		const address = `${mailbox.localPart}@${mailbox.hostname}`;
 		const accountId = encodeMailboxRef({ kind: "account", mailboxId: mailbox.id });
+		const accountCounts = counts.get(accountId) ?? { total: 0, unread: 0 };
 		list.push({
 			id: accountId,
 			name: mailbox.displayName ? `${mailbox.displayName} <${address}>` : address,
 			parentId: null,
 			role: null,
 			sortOrder: sortBase,
-			totalEmails: 0,
-			unreadEmails: 0,
-			totalThreads: 0,
-			unreadThreads: 0,
-			myRights: rights(mailbox, "container"),
+			totalEmails: accountCounts.total,
+			unreadEmails: accountCounts.unread,
+			totalThreads: accountCounts.total,
+			unreadThreads: accountCounts.unread,
+			myRights: rights(mailbox, true),
 			isSubscribed: true,
 		});
 		for (const role of SYSTEM_ROLES) {
@@ -118,7 +115,7 @@ export async function buildAllMailboxes(ctx: JmapContext) {
 				unreadEmails: role === "inbox" ? c.unread : 0,
 				totalThreads: c.total,
 				unreadThreads: role === "inbox" ? c.unread : 0,
-				myRights: rights(mailbox, "system"),
+				myRights: rights(mailbox, true),
 				isSubscribed: true,
 			});
 		}
@@ -135,7 +132,7 @@ export async function buildAllMailboxes(ctx: JmapContext) {
 				unreadEmails: c.unread,
 				totalThreads: c.total,
 				unreadThreads: c.unread,
-				myRights: rights(mailbox, "folder"),
+				myRights: rights(mailbox, false),
 				isSubscribed: true,
 			});
 		}

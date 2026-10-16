@@ -13,7 +13,6 @@ import { decodeBlobId, decodeMailboxRef, roleToStatus } from "./ids";
 import { buildEmailObject, loadAttachmentsByMessage, resolveHeaderProperty } from "./email-objects";
 import { importFlags, parseReceivedAt, resolveDraftsMailbox } from "./email-import-utils";
 import { filterToSql, mailboxRefCondition, sortToSql } from "./email-query";
-import { decodePointerToken } from "./format-utils";
 import { getEmailState } from "./state";
 import { listAccessibleMailboxIdSet, listJmapMailboxes } from "./access";
 import { deleteUpload, readUpload, storeRawDraftMime } from "./blobs";
@@ -95,7 +94,7 @@ export const emailGet: JmapMethodHandler = async (ctx, args) => {
 	const found = new Set<string>();
 	const list = rows.map((row) => {
 		found.add(row.id);
-		const full = buildEmailObject(row, attachments.get(row.id) ?? [], { fetchBodies, maxBodyValueBytes, bodiesAsText: ctx.bodiesAsText });
+		const full = buildEmailObject(row, attachments.get(row.id) ?? [], { fetchBodies, maxBodyValueBytes });
 		if (!properties) return full;
 		const picked: Record<string, unknown> = { id: row.id };
 		for (const key of properties) {
@@ -167,7 +166,7 @@ function targetFromMailboxIds(row: MessageRow, patch: Record<string, unknown>, a
 		for (const [key, value] of Object.entries(patch)) {
 			if (!key.startsWith("mailboxIds/")) continue;
 			touched = true;
-			const id = decodePointerToken(key.slice("mailboxIds/".length));
+			const id = key.slice("mailboxIds/".length);
 			if (value) current.add(id);
 			else current.delete(id);
 		}
@@ -196,7 +195,7 @@ function keywordsFromPatch(patch: Record<string, unknown>): { read?: boolean; st
 		result.starred = !!map[KEYWORD_FLAGGED];
 	}
 	for (const [key, value] of Object.entries(patch)) {
-		if (key.startsWith("keywords/")) apply(decodePointerToken(key.slice("keywords/".length)), value);
+		if (key.startsWith("keywords/")) apply(key.slice("keywords/".length), value);
 	}
 	return result;
 }
@@ -217,26 +216,8 @@ async function createDraft(ctx: JmapContext, value: Record<string, unknown>, acc
 		Array.isArray(list) ? joinEmailAddressList((list as EmailAddressObject[]).map((item) => (item.name ? `"${item.name.replace(/"/g, '\\"')}" <${item.email}>` : item.email))) : "";
 	const bodyValues = (value.bodyValues ?? {}) as Record<string, { value: string }>;
 	const partText = (parts: unknown) => (Array.isArray(parts) && parts[0]?.partId ? bodyValues[parts[0].partId]?.value ?? "" : "");
-	// RFC 8621 §4.6: a client may send `bodyStructure` (a single part or a multipart
-	// tree) instead of textBody/htmlBody. Walk it and pick the text parts out of bodyValues.
-	type BodyPart = { partId?: string; type?: string; disposition?: string; subParts?: BodyPart[] };
-	const fromStructure = { text: [] as string[], html: [] as string[] };
-	const collectParts = (part: BodyPart | undefined): void => {
-		if (!part) return;
-		if (Array.isArray(part.subParts)) {
-			for (const sub of part.subParts) collectParts(sub);
-			return;
-		}
-		if (!part.partId || part.disposition === "attachment") return;
-		const content = bodyValues[part.partId]?.value;
-		if (typeof content !== "string") return;
-		const type = (part.type ?? "text/plain").toLowerCase();
-		if (type === "text/html") fromStructure.html.push(content);
-		else if (type === "text/plain") fromStructure.text.push(content);
-	};
-	collectParts(value.bodyStructure as BodyPart | undefined);
-	const text = partText(value.textBody) || fromStructure.text.join("\n");
-	const html = partText(value.htmlBody) || fromStructure.html.join("");
+	const text = partText(value.textBody);
+	const html = partText(value.htmlBody);
 	const references = Array.isArray(value.references) ? (value.references as string[]).join(" ") : null;
 
 	const id = await insertDraft(ctx, {

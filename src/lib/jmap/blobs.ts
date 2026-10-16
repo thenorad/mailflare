@@ -3,7 +3,6 @@ import { messageAttachments, messages } from "@/db/schema";
 import { newId } from "@/lib/ids";
 import { LIMITS } from "./constants";
 import { decodeBlobId, uploadBlobId } from "./ids";
-import { htmlToText } from "./format-utils";
 import { listAccessibleMailboxIdSet } from "./access";
 import type { JmapContext } from "./types";
 
@@ -52,8 +51,7 @@ export async function storeRawDraftMime(ctx: JmapContext, messageId: string, raw
 
 /**
  * Resolve a blob id to bytes the account may read: an attachment on one of
- * its messages, the raw MIME or a decoded text body of one of its messages,
- * or its own upload.
+ * its messages, the raw MIME of one of its messages, or its own upload.
  */
 export async function readBlob(ctx: JmapContext, blobId: string): Promise<{ body: ReadableStream | ArrayBuffer; type: string; name: string | null; size: number } | null> {
 	const decoded = decodeBlobId(blobId);
@@ -77,33 +75,21 @@ export async function readBlob(ctx: JmapContext, blobId: string): Promise<{ body
 	}
 	const [row] = await ctx.db.select().from(messages).where(and(eq(messages.id, decoded.id))).limit(1);
 	if (!row || !row.mailboxId || !accessible.has(row.mailboxId)) return null;
-	if (decoded.kind === "txt" || decoded.kind === "htm") {
-		// A body part's octets after transfer decoding: the text Mailflare stored, as UTF-8.
-		// A client given bodies as text gets one made from the HTML when there is none.
-		const text = ctx.bodiesAsText && !row.textBody?.trim() ? htmlToText(row.htmlBody ?? "") : row.textBody;
-		const bytes = new TextEncoder().encode((decoded.kind === "txt" ? text : row.htmlBody) ?? "");
-		const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-		return { body, type: decoded.kind === "txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8", name: null, size: bytes.byteLength };
-	}
 	if (row.rawR2Key) {
 		const object = await ctx.env.BUCKET.get(row.rawR2Key);
 		if (object) return { body: object.body, type: "message/rfc822", name: `${row.id}.eml`, size: object.size };
 	}
-	// Outbound mail keeps no raw copy; rebuild a minimal RFC 5322 message. Outbound
-	// rows store Message-IDs without angle brackets, and the body is raw UTF-8.
-	const messageId = row.providerMessageId?.trim().replace(/^<|>$/g, "");
+	// Outbound and imported mail keeps no raw copy; rebuild a minimal RFC 5322 message.
 	const lines = [
 		`From: ${row.fromAddr}`,
 		`To: ${row.toAddr}`,
 		...(row.ccAddr ? [`Cc: ${row.ccAddr}`] : []),
 		`Subject: ${row.subject ?? ""}`,
 		`Date: ${row.createdAt.toUTCString()}`,
-		...(messageId ? [`Message-ID: <${messageId}>`] : []),
+		...(row.providerMessageId ? [`Message-ID: ${row.providerMessageId}`] : []),
 		...(row.inReplyTo ? [`In-Reply-To: <${row.inReplyTo}>`] : []),
-		...(row.references ? [`References: ${row.references.split(/\s+/).filter(Boolean).map((id) => `<${id}>`).join(" ")}`] : []),
 		"MIME-Version: 1.0",
 		`Content-Type: ${row.htmlBody ? "text/html" : "text/plain"}; charset=utf-8`,
-		"Content-Transfer-Encoding: 8bit",
 		"",
 		row.htmlBody ?? row.textBody ?? "",
 	];

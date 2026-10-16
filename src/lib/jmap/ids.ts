@@ -24,37 +24,23 @@ export function decodeMailboxRef(id: string): MailboxRef | null {
 	return null;
 }
 
-/**
- * Blob ids name a stored attachment, a message's raw MIME, a client upload, or
- * one of the decoded text bodies Mailflare keeps per message (`txt`, `htm`).
- * RFC 8621 §4.1.4 gives every non-multipart body part a blobId, and clients
- * fetch a body through it when they do not ask for bodyValues.
- *
- * Clients put blob ids into download URLs, and RFC 8620 §1.2 limits every Id
- * to A-Za-z0-9, "-" and "_": a client that enforces it (Jovra does) never
- * downloads an id holding "~". So the kind and the id are joined by "-"; kinds
- * contain none, which keeps the first "-" unambiguous. Ids minted with "~"
- * before this are still read.
- */
-const BLOB_KINDS = ["att", "msg", "up", "txt", "htm"] as const;
-export type BlobKind = (typeof BLOB_KINDS)[number];
-
+/** Blob ids name either a stored attachment, a message's raw MIME, or a client upload. */
 export function attachmentBlobId(attachmentId: string): string {
-	return `att-${attachmentId}`;
+	return `att${SEP}${attachmentId}`;
 }
 export function messageBlobId(messageId: string): string {
-	return `msg-${messageId}`;
+	return `msg${SEP}${messageId}`;
 }
 export function uploadBlobId(uploadId: string): string {
-	return `up-${uploadId}`;
+	return `up${SEP}${uploadId}`;
 }
-export function bodyBlobId(messageId: string, kind: "txt" | "htm"): string {
-	return `${kind}-${messageId}`;
-}
-export function decodeBlobId(blobId: string): { kind: BlobKind; id: string } | null {
-	const match = /^([a-z]+)[-~](.+)$/.exec(blobId);
-	if (!match || !(BLOB_KINDS as readonly string[]).includes(match[1])) return null;
-	return { kind: match[1] as BlobKind, id: match[2] };
+export function decodeBlobId(blobId: string): { kind: "att" | "msg" | "up"; id: string } | null {
+	const index = blobId.indexOf(SEP);
+	if (index < 0) return null;
+	const kind = blobId.slice(0, index);
+	const id = blobId.slice(index + 1);
+	if (!id || (kind !== "att" && kind !== "msg" && kind !== "up")) return null;
+	return { kind, id };
 }
 
 export function identityId(mailboxId: string, address: string): string {

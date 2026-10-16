@@ -9,11 +9,8 @@ import type { Comparator, Filter, FilterCondition, MailboxRef } from "./types";
 
 /** The SQL predicate for "is in this JMAP Mailbox". */
 export function mailboxRefCondition(ref: MailboxRef): SQL {
-	// The address-level Mailbox only groups its children. No Email lists it in
-	// mailboxIds, so it must hold nothing here either: a query answering "all
-	// mail" for it made clients file Sent mail as received mail of that folder.
-	if (ref.kind === "account") return sql`0`;
 	const base = eq(messages.mailboxId, ref.mailboxId);
+	if (ref.kind === "account") return base;
 	if (ref.kind === "folder") return and(base, eq(messages.folderId, ref.folderId))!;
 	const status = roleToStatus(ref.role);
 	if (ref.role === "inbox") return and(base, eq(messages.status, status), isNull(messages.folderId))!;
@@ -67,15 +64,6 @@ function headerCondition(header: string[]): SQL {
 			// The column is the space-joined chain, so pad both sides to match whole ids only.
 			return value ? like(sql`' ' || coalesce(${messages.references}, '') || ' '`, `% ${likeEscape(value)} %`) : sql`0`;
 		default:
-			// Jovra tags outgoing mail with X-Jovra-Outbox-ID and queries for it to detect
-			// duplicates. Mailflare doesn't store arbitrary headers, so treat the value as a
-			// Message-ID alias (matches if the client reuses it there), else match nothing.
-			if (name === "x-jovra-outbox-id") {
-				if (header.length === 1 || !value) return sql`0`;
-				return inArray(messages.providerMessageId, [value, `<${value}>`]);
-			}
-			// Other client-specific X-* headers: no match instead of failing the whole query.
-			if (name.startsWith("x-")) return sql`0`;
 			throw unsupportedFilter(`Cannot filter on the ${header[0]} header`);
 	}
 }

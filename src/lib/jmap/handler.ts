@@ -3,8 +3,7 @@ import { authenticateApiRequest, hasScope } from "@/lib/api/key-auth";
 import { LIMITS } from "./constants";
 import { corsHeaders, JmapError, problemResponse } from "./errors";
 import { readBlob, storeUpload } from "./blobs";
-import { describeExchange } from "./log-utils";
-import { processRequest, validateRequest } from "./processor";
+import { processRequest, sessionState, validateRequest } from "./processor";
 import { buildSession } from "./session";
 import { getEmailState, getMailboxState } from "./state";
 import type { JmapContext } from "./types";
@@ -35,21 +34,10 @@ export async function handleJmapRequest(request: Request, env: CloudflareEnv): P
 	if (!hasScope(auth.scopes, "jmap")) {
 		return new Response(JSON.stringify({ error: "This API key does not have the jmap scope" }), { status: 403, headers: JSON_HEADERS });
 	}
-	const ctx: JmapContext = {
-		env,
-		db: getDb(env),
-		auth,
-		accountId: auth.userId,
-		origin: env.APP_URL?.trim() || url.origin,
-		createdIds: {},
-		// Jovra draws HTML mail black on its dark-mode background, and its Safe HTML
-		// strips every colour a server could set (style, bgcolor, <font>), so it gets
-		// bodies as plain text instead.
-		bodiesAsText: /\bJovra/i.test(request.headers.get("User-Agent") ?? ""),
-	};
+	const ctx: JmapContext = { env, db: getDb(env), auth, accountId: auth.userId, origin: env.APP_URL?.trim() || url.origin, createdIds: {} };
 
 	if (path === "/jmap/session" && request.method === "GET") {
-		return new Response(JSON.stringify(buildSession(ctx)), { headers: JSON_HEADERS });
+		return new Response(JSON.stringify(buildSession(ctx, await sessionState(ctx))), { headers: JSON_HEADERS });
 	}
 
 	if (path === "/jmap/api" && request.method === "POST") {
@@ -62,10 +50,7 @@ export async function handleJmapRequest(request: Request, env: CloudflareEnv): P
 			return problemResponse("notJSON", 400, "Body is not valid JSON");
 		}
 		try {
-			const started = Date.now();
-			const jmapRequest = validateRequest(body);
-			const response = await processRequest(ctx, jmapRequest);
-			console.log(describeExchange(jmapRequest, response, Date.now() - started));
+			const response = await processRequest(ctx, validateRequest(body));
 			return new Response(JSON.stringify(response), { headers: JSON_HEADERS });
 		} catch (error) {
 			if (error instanceof JmapError) return problemResponse(error.type, 400, error.message, error.extra);

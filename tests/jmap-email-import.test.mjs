@@ -138,24 +138,14 @@ test("the one-element form asks whether the header is present at all", () => {
 });
 
 test("a header Mailflare cannot answer is an unsupportedFilter error, not a match-all (RFC 8620 §5.5)", () => {
-	for (const header of [["Reply-To"], ["List-Id", "list.example.com"], ["Reply-To", "someone@example.com"]]) {
+	for (const header of [["X-Unknown"], ["X-Mailer", "Flectar"], ["Reply-To", "someone@example.com"]]) {
 		assert.throws(() => filterToSql({ header }, writable), (error) => error.type === "unsupportedFilter", JSON.stringify(header));
 	}
 	// Nested in an operator tree it must still surface rather than drop the condition.
 	assert.throws(
-		() => filterToSql({ operator: "AND", conditions: [{ inMailbox: DRAFTS }, { header: ["Reply-To"] }] }, writable),
+		() => filterToSql({ operator: "AND", conditions: [{ inMailbox: DRAFTS }, { header: ["X-Unknown"] }] }, writable),
 		(error) => error.type === "unsupportedFilter",
 	);
-});
-
-test("client X-* headers are never stored, so they match nothing instead of failing the query", () => {
-	for (const header of [["X-Unknown"], ["X-Mailer", "Flectar"], ["X-Jovra-Outbox-ID"]]) {
-		assert.equal(renderFilter({ header }).sql, "0", JSON.stringify(header));
-	}
-	// Jovra's de-duplication id is looked up as a Message-ID alias, with and without brackets.
-	const outbox = renderFilter({ header: ["X-Jovra-Outbox-ID", "<outbox-1@jovra>"] });
-	assert.match(outbox.sql, /"provider_message_id" in \(\?, \?\)/);
-	assert.deepEqual(outbox.params, ["outbox-1@jovra", "<outbox-1@jovra>"]);
 });
 
 test("a malformed header condition is invalidArguments", () => {

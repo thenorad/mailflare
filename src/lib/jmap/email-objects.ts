@@ -3,8 +3,7 @@ import { messageAttachments, messages } from "@/db/schema";
 import { parseEmailAddressParts, splitEmailAddressList } from "@/lib/email/address";
 import { htmlToReadableText } from "@/lib/email/reply-content-utils";
 import { KEYWORD_DRAFT, KEYWORD_FLAGGED, KEYWORD_SEEN } from "./constants";
-import { attachmentBlobId, bodyBlobId, encodeMailboxRef, messageBlobId, statusToRole } from "./ids";
-import { clipUtf8, htmlToText, utcDate } from "./format-utils";
+import { attachmentBlobId, encodeMailboxRef, messageBlobId, statusToRole } from "./ids";
 import type { EmailAddressObject, EmailBodyPart, JmapContext } from "./types";
 
 type MessageRow = typeof messages.$inferSelect;
@@ -43,8 +42,8 @@ function stripBrackets(value: string | null): string | null {
 	return trimmed || null;
 }
 
-function bodyPart(partId: string, type: string, size: number, blobId: string): EmailBodyPart {
-	return { partId, blobId, size, headers: [], name: null, type, charset: "utf-8", disposition: null, cid: null, language: null, location: null };
+function bodyPart(partId: string, type: string, size: number): EmailBodyPart {
+	return { partId, blobId: null, size, headers: [], name: null, type, charset: "utf-8", disposition: null, cid: null, language: null, location: null };
 }
 
 function attachmentPart(attachment: AttachmentRow): EmailBodyPart {
@@ -68,14 +67,13 @@ function attachmentPart(attachment: AttachmentRow): EmailBodyPart {
  * text and HTML Mailflare keeps; attachments become parts with blob ids the
  * download endpoint understands. Property filtering happens in the caller.
  */
-export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], options: { fetchBodies: boolean; maxBodyValueBytes: number; bodiesAsText?: boolean }) {
-	// Given bodiesAsText, the message is its text part alone, made from the HTML when it has none.
-	const text = options.bodiesAsText && !row.textBody?.trim() ? htmlToText(row.htmlBody ?? "") : (row.textBody ?? "");
-	const html = options.bodiesAsText ? "" : (row.htmlBody ?? "");
+export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], options: { fetchBodies: boolean; maxBodyValueBytes: number }) {
+	const text = row.textBody ?? "";
+	const html = row.htmlBody ?? "";
 	const textSize = new TextEncoder().encode(text).length;
 	const htmlSize = new TextEncoder().encode(html).length;
-	const textPart = text ? bodyPart("1", "text/plain", textSize, bodyBlobId(row.id, "txt")) : null;
-	const htmlPart = html ? bodyPart("2", "text/html", htmlSize, bodyBlobId(row.id, "htm")) : null;
+	const textPart = text ? bodyPart("1", "text/plain", textSize) : null;
+	const htmlPart = html ? bodyPart("2", "text/html", htmlSize) : null;
 	const inline = attachments.filter((item) => item.disposition === "inline");
 	const attached = attachments.filter((item) => item.disposition !== "inline");
 
@@ -84,7 +82,7 @@ export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], 
 	const alternative: EmailBodyPart | null =
 		bodyParts.length > 1
 			? { partId: null, blobId: null, size: textSize + htmlSize, name: null, type: "multipart/alternative", charset: null, disposition: null, cid: null, language: null, location: null, subParts: bodyParts }
-			: bodyParts[0] ?? bodyPart("1", "text/plain", 0, bodyBlobId(row.id, "txt"));
+			: bodyParts[0] ?? bodyPart("1", "text/plain", 0);
 	if (attachments.length > 0) {
 		structure = { partId: null, blobId: null, size: 0, name: null, type: "multipart/mixed", charset: null, disposition: null, cid: null, language: null, location: null, subParts: [alternative, ...inline.map(attachmentPart), ...attached.map(attachmentPart)] };
 	} else {
@@ -93,16 +91,20 @@ export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], 
 
 	const bodyValues: Record<string, { value: string; isEncodingProblem: boolean; isTruncated: boolean }> = {};
 	if (options.fetchBodies) {
-		const clip = (value: string, isHtml: boolean) => ({ ...clipUtf8(value, options.maxBodyValueBytes, { html: isHtml }), isEncodingProblem: false });
-		if (textPart) bodyValues["1"] = clip(text, false);
-		if (htmlPart) bodyValues["2"] = clip(html, true);
+		const clip = (value: string) => {
+			const limit = options.maxBodyValueBytes;
+			if (!limit || value.length <= limit) return { value, isEncodingProblem: false, isTruncated: false };
+			return { value: value.slice(0, limit), isEncodingProblem: false, isTruncated: true };
+		};
+		if (textPart) bodyValues["1"] = clip(text);
+		if (htmlPart) bodyValues["2"] = clip(html);
 	}
 
 	const size = textSize + htmlSize + attachments.reduce((total, item) => total + item.size, 0);
 	const preview = (row.snippet ?? htmlToReadableText(html) ?? text).replace(/\s+/g, " ").trim().slice(0, 256);
 	const references = row.references ? row.references.split(/\s+/).filter(Boolean) : null;
 	const from = toAddressObjects(row.fromAddr);
-	const sentAt = utcDate(row.createdAt);
+	const sentAt = row.createdAt.toISOString();
 
 	return {
 		id: row.id,
@@ -125,7 +127,6 @@ export function buildEmailObject(row: MessageRow, attachments: AttachmentRow[], 
 		sentAt,
 		hasAttachment: attached.length > 0,
 		preview,
-		headers: headersFor(row),
 		bodyStructure: structure,
 		bodyValues,
 		textBody: textPart ? [textPart] : htmlPart ? [htmlPart] : [],
@@ -147,22 +148,6 @@ export async function loadAttachmentsByMessage(ctx: JmapContext, messageIds: str
 	return result;
 }
 
-/**
- * The `headers` property (RFC 8621 §4.1.3). Mailflare keeps parsed columns rather
- * than the header block, so the list is rebuilt from them in RFC 5322 order and
- * in raw form, the same values `header:Name` answers. Leaving the property out
- * when a client asks for it breaks clients that decode the Email strictly.
- */
-function headersFor(row: MessageRow): Array<{ name: string; value: string }> {
-	const list: Array<{ name: string; value: string }> = [];
-	for (const name of ["Date", "From", "To", "Cc", "Bcc", "Subject", "Message-ID", "In-Reply-To", "References"]) {
-		const value = resolveHeaderProperty(row, `header:${name}`);
-		if (typeof value === "string") list.push({ name, value });
-	}
-	list.push({ name: "MIME-Version", value: " 1.0" });
-	return list;
-}
-
 /** `header:Name[:asForm]` properties, answered from stored fields; unknown headers are null. */
 export function resolveHeaderProperty(row: MessageRow, property: string): unknown {
 	const [, name, form] = property.split(":");
@@ -180,8 +165,7 @@ export function resolveHeaderProperty(row: MessageRow, property: string): unknow
 			case "bcc":
 				return row.bccAddr;
 			case "message-id":
-				// Outbound rows store the id without its angle brackets; the header always has them.
-				return stripBrackets(row.providerMessageId) ? `<${stripBrackets(row.providerMessageId)}>` : null;
+				return row.providerMessageId;
 			case "in-reply-to":
 				return row.inReplyTo ? `<${row.inReplyTo}>` : null;
 			case "references":
@@ -199,7 +183,7 @@ export function resolveHeaderProperty(row: MessageRow, property: string): unknow
 		case "asmessageids":
 			return raw.split(/\s+/).map((id) => id.replace(/^<|>$/g, "")).filter(Boolean);
 		case "asdate":
-			return utcDate(row.createdAt);
+			return row.createdAt.toISOString();
 		case "astext":
 			return raw;
 		default:

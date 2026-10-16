@@ -1,16 +1,10 @@
 import { CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION, LIMITS } from "./constants";
-import { shortHash } from "./format-utils";
 import type { JmapContext } from "./types";
 
-/**
- * The Session object (RFC 8620 §2). One account per API key: the key's user.
- * Its `state` is a digest of the Session itself, so it only moves when the
- * Session does: every response carries it as `sessionState`, and clients
- * refetch the Session, and may rebuild the account, whenever it differs.
- */
-export function buildSession(ctx: JmapContext) {
+/** The Session object (RFC 8620 §2). One account per API key: the key's user. */
+export function buildSession(ctx: JmapContext, sessionState: string) {
 	const base = `${ctx.origin}/jmap`;
-	const session = {
+	return {
 		capabilities: {
 			[CAPABILITY_CORE]: {
 				maxSizeUpload: LIMITS.maxSizeUpload,
@@ -55,10 +49,6 @@ export function buildSession(ctx: JmapContext) {
 		downloadUrl: `${base}/download/{accountId}/{blobId}/{name}?type={type}`,
 		uploadUrl: `${base}/upload/{accountId}`,
 		eventSourceUrl: `${base}/eventsource?types={types}&closeafter={closeafter}&ping={ping}`,
+		state: sessionState,
 	};
-	return { ...session, state: shortHash(JSON.stringify(session)) };
-}
-
-export function sessionState(ctx: JmapContext): string {
-	return buildSession(ctx).state;
 }
