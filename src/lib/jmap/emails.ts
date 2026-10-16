@@ -216,8 +216,26 @@ async function createDraft(ctx: JmapContext, value: Record<string, unknown>, acc
 		Array.isArray(list) ? joinEmailAddressList((list as EmailAddressObject[]).map((item) => (item.name ? `"${item.name.replace(/"/g, '\\"')}" <${item.email}>` : item.email))) : "";
 	const bodyValues = (value.bodyValues ?? {}) as Record<string, { value: string }>;
 	const partText = (parts: unknown) => (Array.isArray(parts) && parts[0]?.partId ? bodyValues[parts[0].partId]?.value ?? "" : "");
-	const text = partText(value.textBody);
-	const html = partText(value.htmlBody);
+	// RFC 8621 §4.6: a client may send `bodyStructure` (a single part or a multipart
+	// tree) instead of textBody/htmlBody. Walk it and pick the text parts out of bodyValues.
+	type BodyPart = { partId?: string; type?: string; disposition?: string; subParts?: BodyPart[] };
+	const fromStructure = { text: [] as string[], html: [] as string[] };
+	const collectParts = (part: BodyPart | undefined): void => {
+		if (!part) return;
+		if (Array.isArray(part.subParts)) {
+			for (const sub of part.subParts) collectParts(sub);
+			return;
+		}
+		if (!part.partId || part.disposition === "attachment") return;
+		const content = bodyValues[part.partId]?.value;
+		if (typeof content !== "string") return;
+		const type = (part.type ?? "text/plain").toLowerCase();
+		if (type === "text/html") fromStructure.html.push(content);
+		else if (type === "text/plain") fromStructure.text.push(content);
+	};
+	collectParts(value.bodyStructure as BodyPart | undefined);
+	const text = partText(value.textBody) || fromStructure.text.join("\n");
+	const html = partText(value.htmlBody) || fromStructure.html.join("");
 	const references = Array.isArray(value.references) ? (value.references as string[]).join(" ") : null;
 
 	const id = await insertDraft(ctx, {
